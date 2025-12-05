@@ -4,14 +4,36 @@ Script to run optimal parameter experiments for Label Smoothing and Layer Normal
 This script systematically tests different combinations to find optimal hyperparameters.
 """
 
-import subprocess
 import os
 import sys
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
+sys.path.insert(0, os.path.join(project_root, 'src'))
 
-BASE_DIR = "/oak/stanford/groups/henderj/stfan/logs/speech_logs/pt_neural_decoder_experiments"
+# Change to neural_decoder directory for config loading
+neural_decoder_dir = os.path.join(project_root, 'src', 'neural_decoder')
+os.chdir(neural_decoder_dir)
+
+# Import after path setup
+from omegaconf import OmegaConf
+from neural_decoder.neural_decoder_trainer import trainModel
+import torch
+import gc
+
+# Colab paths
+BASE_DIR = "/content/drive/MyDrive/ECEC243A/FinalProject/outputs"
+DATASET_PATH = "/content/drive/MyDrive/ECEC243A/FinalProject/data/ptDecoder_ctc"
+
+print(f"[INFO] Using Colab paths.", flush=True)
+print(f"[INFO] BASE_DIR: {BASE_DIR}", flush=True)
+print(f"[INFO] DATASET_PATH: {DATASET_PATH}", flush=True)
+
+# Verify dataset path exists
+if not os.path.exists(DATASET_PATH):
+    print(f"[WARNING] Dataset path does not exist: {DATASET_PATH}", flush=True)
+    print(f"[WARNING] Please ensure the dataset file exists at this path.", flush=True)
 
 # Experiment configurations
 EXPERIMENTS = [
@@ -85,8 +107,13 @@ EXPERIMENTS = [
 ]
 
 
-def run_experiment(exp_config):
+def run_experiment(exp_config, base_config):
     """Run a single experiment with given configuration."""
+    # Clear GPU memory before starting
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+    
     name = exp_config["name"]
     output_dir = os.path.join(BASE_DIR, name)
     
@@ -96,25 +123,44 @@ def run_experiment(exp_config):
     print(f"  Layer Norm: {exp_config['use_layer_norm']}")
     print(f"  Layer Norm Position: {exp_config['layer_norm_position']}")
     print(f"  Output Directory: {output_dir}")
-    print(f"{'='*60}\n")
+    print(f"{'='*60}\n", flush=True)
     
-    cmd = [
-        sys.executable,
-        "-m", "neural_decoder.neural_decoder_trainer",
-        "--config-path", "src/neural_decoder/conf",
-        "--config-name", "config",
-        f"outputDir={output_dir}",
-        f"label_smoothing={exp_config['label_smoothing']}",
-        f"use_layer_norm={exp_config['use_layer_norm']}",
-        f"layer_norm_position={exp_config['layer_norm_position']}",
-    ]
+    # Create a copy of base config and update with experiment-specific values
+    # Remove Hydra-specific sections that cause interpolation errors
+    config_dict = OmegaConf.to_container(base_config, resolve=False)
+    if 'hydra' in config_dict:
+        del config_dict['hydra']
+    
+    # Create new config from dict
+    cfg = OmegaConf.create(config_dict)
+    
+    # Update with experiment-specific values
+    cfg['outputDir'] = output_dir
+    cfg['datasetPath'] = DATASET_PATH
+    cfg['label_smoothing'] = exp_config['label_smoothing']
+    cfg['use_layer_norm'] = exp_config['use_layer_norm']
+    cfg['layer_norm_position'] = exp_config['layer_norm_position']
     
     try:
-        result = subprocess.run(cmd, check=True, cwd=os.path.dirname(os.path.dirname(__file__)))
-        print(f"✓ Experiment {name} completed successfully")
+        trainModel(cfg)
+        print(f"✓ Experiment {name} completed successfully", flush=True)
+        
+        # Clear GPU memory after each experiment
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        
         return True
-    except subprocess.CalledProcessError as e:
-        print(f"✗ Experiment {name} failed with error: {e}")
+    except Exception as e:
+        print(f"✗ Experiment {name} failed with error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        
+        # Clear GPU memory even on failure
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        
         return False
 
 
@@ -125,6 +171,17 @@ def main():
     print("="*60)
     print(f"Total experiments: {len(EXPERIMENTS)}")
     print(f"Base directory: {BASE_DIR}")
+    print(f"Dataset path: {DATASET_PATH}")
+    print()
+    
+    # Load base config
+    config_path = os.path.join(neural_decoder_dir, 'conf', 'config.yaml')
+    if not os.path.exists(config_path):
+        print(f"ERROR: Config file not found at {config_path}")
+        return
+    
+    base_config = OmegaConf.load(config_path)
+    print(f"Loaded config from: {config_path}")
     print()
     
     # Create base directory
@@ -133,7 +190,7 @@ def main():
     results = []
     for i, exp in enumerate(EXPERIMENTS, 1):
         print(f"\n[{i}/{len(EXPERIMENTS)}]")
-        success = run_experiment(exp)
+        success = run_experiment(exp, base_config)
         results.append((exp["name"], success))
     
     # Print summary

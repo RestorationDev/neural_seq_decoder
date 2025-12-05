@@ -7,6 +7,9 @@ This script systematically tests different combinations to find optimal hyperpar
 import os
 import sys
 
+# Set PyTorch CUDA memory allocator to reduce fragmentation
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 # Add src to path
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(script_dir)
@@ -112,6 +115,13 @@ def run_experiment(exp_config, base_config):
     # Clear GPU memory before starting
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        # Check available memory
+        free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+        free_memory_gb = free_memory / (1024**3)
+        print(f"[INFO] Available GPU memory: {free_memory_gb:.2f} GB", flush=True)
+        if free_memory_gb < 2.0:
+            print(f"[WARNING] Low GPU memory available. Consider killing other processes or reducing batch size.", flush=True)
     gc.collect()
     
     name = exp_config["name"]
@@ -148,6 +158,7 @@ def run_experiment(exp_config, base_config):
         # Clear GPU memory after each experiment
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         gc.collect()
         
         return True
@@ -159,6 +170,7 @@ def run_experiment(exp_config, base_config):
         # Clear GPU memory even on failure
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+            torch.cuda.synchronize()
         gc.collect()
         
         return False
@@ -173,6 +185,28 @@ def main():
     print(f"Base directory: {BASE_DIR}")
     print(f"Dataset path: {DATASET_PATH}")
     print()
+    
+    # Check GPU memory status
+    if torch.cuda.is_available():
+        total_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        allocated_memory = torch.cuda.memory_allocated(0) / (1024**3)
+        reserved_memory = torch.cuda.memory_reserved(0) / (1024**3)
+        free_memory = total_memory - reserved_memory
+        
+        print(f"[INFO] GPU Memory Status:")
+        print(f"  Total: {total_memory:.2f} GB")
+        print(f"  Allocated: {allocated_memory:.2f} GB")
+        print(f"  Reserved: {reserved_memory:.2f} GB")
+        print(f"  Free: {free_memory:.2f} GB")
+        print()
+        
+        if free_memory < 3.0:
+            print("[WARNING] Low GPU memory available!")
+            print("[WARNING] The model needs ~2 GB for backprop. Consider:")
+            print("  1. Killing other GPU processes: !nvidia-smi")
+            print("  2. Restarting Colab runtime: Runtime -> Restart runtime")
+            print("  3. Reducing batch size in config.yaml")
+            print()
     
     # Load base config
     config_path = os.path.join(neural_decoder_dir, 'conf', 'config.yaml')

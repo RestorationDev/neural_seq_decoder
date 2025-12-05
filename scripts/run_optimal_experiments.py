@@ -141,10 +141,14 @@ def run_experiment(exp_config, base_config):
     if 'hydra' in config_dict:
         del config_dict['hydra']
     
+    # CRITICAL: Reduce batch size BEFORE creating OmegaConf to ensure it's applied
+    # With limited GPU memory, we need smaller batches
+    config_dict['batchSize'] = 8  # Reduced from 64 to 8 (8x reduction in memory per batch)
+    
     # Create new config from dict
     cfg = OmegaConf.create(config_dict)
     
-    # Update with experiment-specific values
+    # Update with experiment-specific values (use both dict and OmegaConf syntax to ensure it works)
     cfg['outputDir'] = output_dir
     cfg['datasetPath'] = DATASET_PATH
     cfg['label_smoothing'] = exp_config['label_smoothing']
@@ -152,8 +156,13 @@ def run_experiment(exp_config, base_config):
     cfg['layer_norm_position'] = exp_config['layer_norm_position']
     # Skip test evaluation to save GPU memory (can evaluate separately later)
     cfg['skip_test_eval'] = True
-    # Reduce batch size if memory is constrained (optional - uncomment if needed)
-    # cfg['batchSize'] = 32
+    # Ensure batch size is set (in case dict update didn't work)
+    cfg.batchSize = 8
+    cfg['batchSize'] = 8
+    
+    # Debug: Verify batch size is actually set
+    print(f"[DEBUG] Batch size set to: {cfg.get('batchSize', 'NOT SET')}", flush=True)
+    print(f"[DEBUG] Config batchSize value: {cfg.batchSize}", flush=True)
     
     try:
         trainModel(cfg)

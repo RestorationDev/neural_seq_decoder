@@ -33,3 +33,9 @@ dropout: 0.4
 strideLen: 4
 kernelLen: 32
 bidirectional: True
+
+# Label Smoothing (0.0 = disabled, typical: 0.05-0.1)
+label_smoothing: 0.0
+
+# Layer Normalization
+use_layer_norm: False

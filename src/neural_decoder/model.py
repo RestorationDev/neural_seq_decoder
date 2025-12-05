@@ -18,6 +18,7 @@ class GRUDecoder(nn.Module):
         kernelLen=14,
         gaussianSmoothWidth=0,
         bidirectional=False,
+        use_layer_norm=False,
     ):
         super(GRUDecoder, self).__init__()
 
@@ -33,6 +34,7 @@ class GRUDecoder(nn.Module):
         self.kernelLen = kernelLen
         self.gaussianSmoothWidth = gaussianSmoothWidth
         self.bidirectional = bidirectional
+        self.use_layer_norm = use_layer_norm
         self.inputLayerNonlinearity = torch.nn.Softsign()
         self.unfolder = torch.nn.Unfold(
             (self.kernelLen, 1), dilation=1, padding=0, stride=self.strideLen
@@ -71,6 +73,11 @@ class GRUDecoder(nn.Module):
             thisLayer.weight = torch.nn.Parameter(
                 thisLayer.weight + torch.eye(neural_dim)
             )
+
+        # Layer normalization (optional)
+        if self.use_layer_norm:
+            gru_output_dim = hidden_dim * 2 if self.bidirectional else hidden_dim
+            self.layer_norm = nn.LayerNorm(gru_output_dim)
 
         # rnn outputs
         if self.bidirectional:
@@ -117,6 +124,10 @@ class GRUDecoder(nn.Module):
             ).requires_grad_()
 
         hid, _ = self.gru_decoder(stridedInputs, h0.detach())
+
+        # Apply layer normalization if enabled
+        if self.use_layer_norm:
+            hid = self.layer_norm(hid)
 
         # get seq
         seq_out = self.fc_decoder_out(hid)

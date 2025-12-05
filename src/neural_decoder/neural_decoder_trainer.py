@@ -13,6 +13,26 @@ from .model import GRUDecoder
 from .dataset import SpeechDataset
 
 
+def apply_label_smoothing(logits, smoothing=0.0):
+    """Apply label smoothing to logits before CTC loss."""
+    if smoothing <= 0.0:
+        return logits.log_softmax(2)
+    
+    num_classes = logits.shape[-1]
+    log_probs = logits.log_softmax(2)
+    uniform_log_prob = torch.log(torch.ones_like(log_probs) / num_classes)
+    
+    # Mix: (1-smoothing) * log_probs + smoothing * uniform
+    smoothed = torch.logsumexp(
+        torch.stack([
+            torch.log(torch.tensor(1.0 - smoothing, device=logits.device)) + log_probs,
+            torch.log(torch.tensor(smoothing, device=logits.device)) + uniform_log_prob
+        ]),
+        dim=0
+    )
+    return smoothed
+
+
 def getDatasetLoaders(
     datasetName,
     batchSize,
@@ -81,9 +101,11 @@ def trainModel(args):
         kernelLen=args["kernelLen"],
         gaussianSmoothWidth=args["gaussianSmoothWidth"],
         bidirectional=args["bidirectional"],
+        use_layer_norm=args.get("use_layer_norm", False),
     ).to(device)
 
     loss_ctc = torch.nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
+    label_smoothing = args.get("label_smoothing", 0.0)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=args["lrStart"],
@@ -127,8 +149,11 @@ def trainModel(args):
         # Compute prediction error
         pred = model.forward(X, dayIdx)
 
+        # Apply label smoothing if enabled
+        pred_log_probs = apply_label_smoothing(pred, label_smoothing)
+
         loss = loss_ctc(
-            torch.permute(pred.log_softmax(2), [1, 0, 2]),
+            torch.permute(pred_log_probs, [1, 0, 2]),
             y,
             ((X_len - model.kernelLen) / model.strideLen).to(torch.int32),
             y_len,
@@ -160,8 +185,9 @@ def trainModel(args):
                     )
 
                     pred = model.forward(X, testDayIdx)
+                    pred_log_probs = apply_label_smoothing(pred, label_smoothing)
                     loss = loss_ctc(
-                        torch.permute(pred.log_softmax(2), [1, 0, 2]),
+                        torch.permute(pred_log_probs, [1, 0, 2]),
                         y,
                         ((X_len - model.kernelLen) / model.strideLen).to(torch.int32),
                         y_len,
@@ -230,6 +256,7 @@ def loadModel(modelDir, nInputLayers=24, device="cuda"):
         kernelLen=args["kernelLen"],
         gaussianSmoothWidth=args["gaussianSmoothWidth"],
         bidirectional=args["bidirectional"],
+        use_layer_norm=args.get("use_layer_norm", False),
     ).to(device)
 
     model.load_state_dict(torch.load(modelWeightPath, map_location=device))

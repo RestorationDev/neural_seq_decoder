@@ -273,7 +273,12 @@ def trainModel(args):
                         y_len,
                     )
                     loss = torch.sum(loss)
-                    allLoss.append(loss.cpu().detach().numpy())
+                    # Convert to numpy safely - handle case where numpy might not be available
+                    try:
+                        allLoss.append(loss.cpu().detach().numpy())
+                    except (RuntimeError, AttributeError) as e:
+                        # Fallback: convert to Python float if numpy fails
+                        allLoss.append(float(loss.cpu().detach().item()))
 
                     adjustedLens = ((X_len - model.kernelLen) / model.strideLen).to(
                         torch.int32
@@ -284,12 +289,24 @@ def trainModel(args):
                             dim=-1,
                         )  # [num_seq,]
                         decodedSeq = torch.unique_consecutive(decodedSeq, dim=-1)
-                        decodedSeq = decodedSeq.cpu().detach().numpy()
+                        # Convert to numpy safely
+                        try:
+                            decodedSeq = decodedSeq.cpu().detach().numpy()
+                        except (RuntimeError, AttributeError):
+                            # Fallback: convert to list then numpy array
+                            decodedSeq = decodedSeq.cpu().detach().tolist()
+                            decodedSeq = np.array(decodedSeq)
                         decodedSeq = np.array([i for i in decodedSeq if i != 0])
 
-                        trueSeq = np.array(
-                            y[iterIdx][0 : y_len[iterIdx]].cpu().detach()
-                        )
+                        # Convert to numpy safely
+                        try:
+                            trueSeq = np.array(
+                                y[iterIdx][0 : y_len[iterIdx]].cpu().detach()
+                            )
+                        except (RuntimeError, AttributeError):
+                            # Fallback: convert to list then numpy array
+                            trueSeq = y[iterIdx][0 : y_len[iterIdx]].cpu().detach().tolist()
+                            trueSeq = np.array(trueSeq)
 
                         matcher = SequenceMatcher(
                             a=trueSeq.tolist(), b=decodedSeq.tolist()

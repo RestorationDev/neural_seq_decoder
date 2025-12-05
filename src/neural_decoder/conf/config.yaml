@@ -40,3 +40,7 @@ label_smoothing: 0.0
 # Layer Normalization
 use_layer_norm: False
 layer_norm_position: after_gru  # Options: "after_input", "after_gru", "both", "none"
+
+# Test evaluation (set to False to skip test evaluation during training to save memory)
+skip_test_eval: False
+testInterval: 100  # Evaluate on test set every N batches

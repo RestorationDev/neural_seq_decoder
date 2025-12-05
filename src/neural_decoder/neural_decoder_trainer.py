@@ -237,7 +237,9 @@ def trainModel(args):
         # print(endTime - startTime)
 
         # Eval
-        if batch % 100 == 0:
+        test_interval = args.get("testInterval", 100)
+        skip_test_eval = args.get("skip_test_eval", False)
+        if batch % test_interval == 0 and not skip_test_eval:
             with torch.no_grad():
                 model.eval()
                 allLoss = []

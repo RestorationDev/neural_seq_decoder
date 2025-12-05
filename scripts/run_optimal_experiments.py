@@ -150,6 +150,10 @@ def run_experiment(exp_config, base_config):
     cfg['label_smoothing'] = exp_config['label_smoothing']
     cfg['use_layer_norm'] = exp_config['use_layer_norm']
     cfg['layer_norm_position'] = exp_config['layer_norm_position']
+    # Skip test evaluation to save GPU memory (can evaluate separately later)
+    cfg['skip_test_eval'] = True
+    # Reduce batch size if memory is constrained (optional - uncomment if needed)
+    # cfg['batchSize'] = 32
     
     try:
         trainModel(cfg)

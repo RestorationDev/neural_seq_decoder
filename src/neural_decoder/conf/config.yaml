@@ -33,3 +33,10 @@ dropout: 0.4
 strideLen: 4
 kernelLen: 32
 bidirectional: True
+
+# Label Smoothing (0.0 = disabled, typical range: 0.0-0.1)
+label_smoothing: 0.0
+
+# Layer Normalization
+use_layer_norm: False
+layer_norm_position: after_gru  # Options: "after_input", "after_gru", "both", "none"

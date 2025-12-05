@@ -13,6 +13,44 @@ from .model import GRUDecoder
 from .dataset import SpeechDataset
 
 
+def apply_label_smoothing(logits, smoothing=0.0, num_classes=None):
+    """
+    Apply label smoothing to logits for CTC loss.
+    
+    Args:
+        logits: Tensor of shape [batch, seq_len, num_classes] or [seq_len, batch, num_classes]
+        smoothing: Label smoothing factor (0.0 = no smoothing, 1.0 = uniform distribution)
+        num_classes: Number of classes (including blank token)
+    
+    Returns:
+        Log probabilities (smoothed if smoothing > 0, otherwise standard log_softmax)
+    """
+    # Always convert to log probabilities first
+    log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+    
+    if smoothing <= 0.0:
+        return log_probs
+    
+    if num_classes is None:
+        num_classes = logits.shape[-1]
+    
+    # Create uniform distribution in log space
+    uniform_log_prob = torch.log(torch.ones_like(log_probs) / num_classes)
+    
+    # Apply smoothing: (1 - smoothing) * log_probs + smoothing * uniform
+    # In log space: log((1-smoothing) * exp(log_probs) + smoothing * exp(uniform))
+    # Using logsumexp for numerical stability
+    smoothed_log_probs = torch.logsumexp(
+        torch.stack([
+            torch.log(1.0 - smoothing) + log_probs,
+            torch.log(smoothing) + uniform_log_prob
+        ]),
+        dim=0
+    )
+    
+    return smoothed_log_probs
+
+
 def getDatasetLoaders(
     datasetName,
     batchSize,
@@ -81,9 +119,12 @@ def trainModel(args):
         kernelLen=args["kernelLen"],
         gaussianSmoothWidth=args["gaussianSmoothWidth"],
         bidirectional=args["bidirectional"],
+        use_layer_norm=args.get("use_layer_norm", False),
+        layer_norm_position=args.get("layer_norm_position", "after_gru"),
     ).to(device)
 
     loss_ctc = torch.nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
+    label_smoothing = args.get("label_smoothing", 0.0)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=args["lrStart"],
@@ -126,9 +167,19 @@ def trainModel(args):
 
         # Compute prediction error
         pred = model.forward(X, dayIdx)
+        
+        # Apply label smoothing if enabled
+        if label_smoothing > 0.0:
+            pred_log_probs = apply_label_smoothing(
+                pred, 
+                smoothing=label_smoothing, 
+                num_classes=args["nClasses"] + 1  # +1 for CTC blank
+            )
+        else:
+            pred_log_probs = pred.log_softmax(2)
 
         loss = loss_ctc(
-            torch.permute(pred.log_softmax(2), [1, 0, 2]),
+            torch.permute(pred_log_probs, [1, 0, 2]),
             y,
             ((X_len - model.kernelLen) / model.strideLen).to(torch.int32),
             y_len,
@@ -160,8 +211,19 @@ def trainModel(args):
                     )
 
                     pred = model.forward(X, testDayIdx)
+                    
+                    # Apply label smoothing if enabled (for consistency, but typically not needed in eval)
+                    if label_smoothing > 0.0:
+                        pred_log_probs = apply_label_smoothing(
+                            pred,
+                            smoothing=label_smoothing,
+                            num_classes=args["nClasses"] + 1
+                        )
+                    else:
+                        pred_log_probs = pred.log_softmax(2)
+                    
                     loss = loss_ctc(
-                        torch.permute(pred.log_softmax(2), [1, 0, 2]),
+                        torch.permute(pred_log_probs, [1, 0, 2]),
                         y,
                         ((X_len - model.kernelLen) / model.strideLen).to(torch.int32),
                         y_len,
@@ -230,6 +292,8 @@ def loadModel(modelDir, nInputLayers=24, device="cuda"):
         kernelLen=args["kernelLen"],
         gaussianSmoothWidth=args["gaussianSmoothWidth"],
         bidirectional=args["bidirectional"],
+        use_layer_norm=args.get("use_layer_norm", False),
+        layer_norm_position=args.get("layer_norm_position", "after_gru"),
     ).to(device)
 
     model.load_state_dict(torch.load(modelWeightPath, map_location=device))

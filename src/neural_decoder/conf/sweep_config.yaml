@@ -1,0 +1,34 @@
+# Hyperparameter sweep configuration for Label Smoothing and Layer Normalization experiments
+# Usage: python -m neural_decoder.neural_decoder_trainer --config-path=conf --config-name=sweep_config
+
+defaults:
+  - config
+
+hydra:
+  sweep:
+    dir: ${outputDir}/sweeps
+    subdir: ${hydra.job.override_dirname}
+
+# Base configuration (inherits from config.yaml)
+# Override specific parameters for experiments
+
+# Label Smoothing sweep values
+# Uncomment one of these to test different label smoothing values:
+# label_smoothing: 0.0    # Baseline (no smoothing)
+# label_smoothing: 0.05   # Light smoothing
+# label_smoothing: 0.1    # Moderate smoothing
+# label_smoothing: 0.15   # Strong smoothing
+
+# Layer Normalization sweep values
+# Uncomment one of these to test different layer norm configurations:
+# use_layer_norm: False
+# use_layer_norm: True
+# layer_norm_position: after_input
+# layer_norm_position: after_gru
+# layer_norm_position: both
+
+# For multi-parameter sweeps, use Hydra's multirun feature:
+# Example command:
+# python -m neural_decoder.neural_decoder_trainer --config-name=sweep_config \
+#   -m label_smoothing=0.0,0.05,0.1 use_layer_norm=False,True layer_norm_position=after_gru,both
+

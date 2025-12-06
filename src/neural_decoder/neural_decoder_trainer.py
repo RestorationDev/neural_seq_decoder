@@ -14,7 +14,17 @@ from .dataset import SpeechDataset
 
 
 def apply_label_smoothing(logits, smoothing=0.0):
-    """Apply label smoothing to logits before CTC loss."""
+    """Apply label smoothing to logits before CTC loss.
+    
+    Args:
+        logits: Model output logits
+        smoothing: Float value (0.0-1.0) or "progressive" for adaptive smoothing
+    """
+    # Handle progressive smoothing
+    if smoothing == "progressive":
+        # This will be handled in the training loop with batch number
+        smoothing = 0.0  # Will be overridden
+    
     if smoothing <= 0.0:
         return logits.log_softmax(2)
     
@@ -102,10 +112,18 @@ def trainModel(args):
         gaussianSmoothWidth=args["gaussianSmoothWidth"],
         bidirectional=args["bidirectional"],
         use_layer_norm=args.get("use_layer_norm", False),
+        layer_norm_position=args.get("layer_norm_position", "post"),
+        use_post_gru_stack=args.get("use_post_gru_stack", False),
+        post_gru_stack_layers=args.get("post_gru_stack_layers", 2),
+        post_gru_stack_dropout=args.get("post_gru_stack_dropout", 0.1),
     ).to(device)
 
     loss_ctc = torch.nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
     label_smoothing = args.get("label_smoothing", 0.0)
+    use_progressive_smoothing = (label_smoothing == "progressive")
+    if use_progressive_smoothing:
+        smoothing_start = 0.15
+        smoothing_end = 0.05
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=args["lrStart"],
@@ -150,7 +168,14 @@ def trainModel(args):
         pred = model.forward(X, dayIdx)
 
         # Apply label smoothing if enabled
-        pred_log_probs = apply_label_smoothing(pred, label_smoothing)
+        # Handle progressive smoothing: decay from start to end over training
+        if use_progressive_smoothing:
+            progress = batch / args["nBatch"]  # 0.0 to 1.0
+            current_smoothing = smoothing_start - (smoothing_start - smoothing_end) * progress
+        else:
+            current_smoothing = label_smoothing if isinstance(label_smoothing, (int, float)) else 0.0
+        
+        pred_log_probs = apply_label_smoothing(pred, current_smoothing)
 
         loss = loss_ctc(
             torch.permute(pred_log_probs, [1, 0, 2]),
@@ -185,7 +210,13 @@ def trainModel(args):
                     )
 
                     pred = model.forward(X, testDayIdx)
-                    pred_log_probs = apply_label_smoothing(pred, label_smoothing)
+                    # Use current smoothing value for evaluation too
+                    if use_progressive_smoothing:
+                        progress = batch / args["nBatch"]
+                        current_smoothing = smoothing_start - (smoothing_start - smoothing_end) * progress
+                    else:
+                        current_smoothing = label_smoothing if isinstance(label_smoothing, (int, float)) else 0.0
+                    pred_log_probs = apply_label_smoothing(pred, current_smoothing)
                     loss = loss_ctc(
                         torch.permute(pred_log_probs, [1, 0, 2]),
                         y,
@@ -257,6 +288,10 @@ def loadModel(modelDir, nInputLayers=24, device="cuda"):
         gaussianSmoothWidth=args["gaussianSmoothWidth"],
         bidirectional=args["bidirectional"],
         use_layer_norm=args.get("use_layer_norm", False),
+        layer_norm_position=args.get("layer_norm_position", "post"),
+        use_post_gru_stack=args.get("use_post_gru_stack", False),
+        post_gru_stack_layers=args.get("post_gru_stack_layers", 2),
+        post_gru_stack_dropout=args.get("post_gru_stack_dropout", 0.1),
     ).to(device)
 
     model.load_state_dict(torch.load(modelWeightPath, map_location=device))

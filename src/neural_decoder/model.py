@@ -19,6 +19,10 @@ class GRUDecoder(nn.Module):
         gaussianSmoothWidth=0,
         bidirectional=False,
         use_layer_norm=False,
+        layer_norm_position="post",  # "pre", "post", "dual", or "none"
+        use_post_gru_stack=False,  # Stack of linear + layer_norm + dropout after GRU
+        post_gru_stack_layers=2,  # Number of layers in the stack
+        post_gru_stack_dropout=0.1,  # Dropout rate for the stack
     ):
         super(GRUDecoder, self).__init__()
 
@@ -35,6 +39,10 @@ class GRUDecoder(nn.Module):
         self.gaussianSmoothWidth = gaussianSmoothWidth
         self.bidirectional = bidirectional
         self.use_layer_norm = use_layer_norm
+        self.layer_norm_position = layer_norm_position if use_layer_norm else "none"
+        self.use_post_gru_stack = use_post_gru_stack
+        self.post_gru_stack_layers = post_gru_stack_layers
+        self.post_gru_stack_dropout = post_gru_stack_dropout
         self.inputLayerNonlinearity = torch.nn.Softsign()
         self.unfolder = torch.nn.Unfold(
             (self.kernelLen, 1), dilation=1, padding=0, stride=self.strideLen
@@ -77,7 +85,29 @@ class GRUDecoder(nn.Module):
         # Layer normalization (optional)
         if self.use_layer_norm:
             gru_output_dim = hidden_dim * 2 if self.bidirectional else hidden_dim
-            self.layer_norm = nn.LayerNorm(gru_output_dim)
+            input_dim = neural_dim
+            
+            if self.layer_norm_position in ["pre", "dual"]:
+                # Pre-norm: normalize before GRU input
+                self.layer_norm_pre = nn.LayerNorm((neural_dim) * self.kernelLen)
+            if self.layer_norm_position in ["post", "dual"]:
+                # Post-norm: normalize after GRU output
+                self.layer_norm_post = nn.LayerNorm(gru_output_dim)
+            if self.layer_norm_position == "dual":
+                # Dual: also normalize after input transformation
+                self.layer_norm_input = nn.LayerNorm(neural_dim)
+
+        # Post-GRU stack: linear + layer_norm + dropout (as per benchmark)
+        if self.use_post_gru_stack:
+            gru_output_dim = hidden_dim * 2 if self.bidirectional else hidden_dim
+            self.post_gru_stack = nn.ModuleList()
+            for i in range(self.post_gru_stack_layers):
+                self.post_gru_stack.append(nn.Linear(gru_output_dim, gru_output_dim))
+                self.post_gru_stack.append(nn.LayerNorm(gru_output_dim))
+                self.post_gru_stack.append(nn.Dropout(self.post_gru_stack_dropout))
+            final_dim = gru_output_dim
+        else:
+            final_dim = hidden_dim * 2 if self.bidirectional else hidden_dim
 
         # rnn outputs
         if self.bidirectional:
@@ -98,6 +128,10 @@ class GRUDecoder(nn.Module):
             "btd,bdk->btk", neuralInput, dayWeights
         ) + torch.index_select(self.dayBias, 0, dayIdx)
         transformedNeural = self.inputLayerNonlinearity(transformedNeural)
+        
+        # Apply layer normalization after input transformation if dual
+        if self.use_layer_norm and self.layer_norm_position == "dual":
+            transformedNeural = self.layer_norm_input(transformedNeural)
 
         # stride/kernel
         stridedInputs = torch.permute(
@@ -106,6 +140,10 @@ class GRUDecoder(nn.Module):
             ),
             (0, 2, 1),
         )
+        
+        # Apply pre-norm if enabled (before GRU)
+        if self.use_layer_norm and self.layer_norm_position in ["pre", "dual"]:
+            stridedInputs = self.layer_norm_pre(stridedInputs)
 
         # apply RNN layer
         if self.bidirectional:
@@ -125,9 +163,19 @@ class GRUDecoder(nn.Module):
 
         hid, _ = self.gru_decoder(stridedInputs, h0.detach())
 
-        # Apply layer normalization if enabled
-        if self.use_layer_norm:
-            hid = self.layer_norm(hid)
+        # Apply post-norm if enabled (after GRU, before stack)
+        if self.use_layer_norm and self.layer_norm_position in ["post", "dual"]:
+            hid = self.layer_norm_post(hid)
+
+        # Apply post-GRU stack if enabled (linear + layer_norm + dropout)
+        if self.use_post_gru_stack:
+            for i in range(0, len(self.post_gru_stack), 3):
+                linear = self.post_gru_stack[i]
+                layer_norm = self.post_gru_stack[i + 1]
+                dropout = self.post_gru_stack[i + 2]
+                hid = linear(hid)
+                hid = layer_norm(hid)
+                hid = dropout(hid)
 
         # get seq
         seq_out = self.fc_decoder_out(hid)

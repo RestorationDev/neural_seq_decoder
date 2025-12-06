@@ -39,3 +39,4 @@ label_smoothing: 0.0
 
 # Layer Normalization
 use_layer_norm: False
+layer_norm_position: post  # Options: "pre", "post", "dual", "none"
